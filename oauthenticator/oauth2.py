@@ -80,7 +80,7 @@ class OAuthLoginHandler(OAuth2Mixin, BaseHandler):
         return self.authenticator.userdata_url
 
     def set_state_cookie(self, state):
-        self._set_cookie(STATE_COOKIE_NAME, state, expires_days=1, httponly=True)
+        self._set_cookie(STATE_COOKIE_NAME, state, expires_days=1, httponly=False)
 
     _state = None
 
