@@ -7,7 +7,10 @@ import os
 
 import requests
 from jupyterhub.auth import LocalAuthenticator
-from tornado.httpclient import HTTPRequest
+from tornado import web
+from tornado.auth import OAuth2Mixin
+from tornado.curl_httpclient import CurlError
+from tornado.httpclient import AsyncHTTPClient, HTTPClient, HTTPRequest
 from tornado.httputil import url_concat
 from traitlets import Bool
 from traitlets import default
@@ -34,6 +37,8 @@ class OpenShiftOAuthenticator(OAuthenticator):
     )
 
     ca_certs = Unicode(config=True)
+    system_ca_certs = Unicode(config=True)
+    use_ca_certs_for_token_request = True if ca_certs else False
 
     allowed_groups = Set(
         config=True,
@@ -50,7 +55,13 @@ class OpenShiftOAuthenticator(OAuthenticator):
         ca_cert_file = "/run/secrets/kubernetes.io/serviceaccount/ca.crt"
         if self.validate_cert and os.path.exists(ca_cert_file):
             return ca_cert_file
+        return ''
 
+    @default("system_ca_certs")
+    def _system_ca_certs_default(self):
+        ca_cert_file = "/etc/pki/tls/cert.pem"
+        if self.validate_cert and os.path.exists(ca_cert_file):
+            return ca_cert_file
         return ''
 
     openshift_auth_api_url = Unicode(config=True)
@@ -106,17 +117,26 @@ class OpenShiftOAuthenticator(OAuthenticator):
 
         url = url_concat(self.token_url, params)
 
-        req = HTTPRequest(
-            url,
-            method="POST",
-            validate_cert=self.validate_cert,
-            ca_certs=self.ca_certs,
-            headers={"Accept": "application/json"},
-            body='',  # Body is required for a POST...
-        )
+        def token_request(url):
+            return HTTPRequest(
+                url,
+                method="POST",
+                validate_cert=self.validate_cert,
+                ca_certs=self.ca_certs if self.use_ca_certs_for_token_request else self.system_ca_certs,
+                headers={"Accept": "application/json"},
+                body='',  # Body is required for a POST...
+               )
+        try:
+            req = token_request(url)
+            resp = await self.fetch(req)
+        except CurlError:
+            certs = "system ca certs" if self.use_ca_certs_for_token_request else "ca certs"
+            self.log.info("Retrying oauth token request with %s" % certs)
+            self.use_ca_certs_for_token_request = not self.use_ca_certs_for_token_request
+            req = token_request(url)
+            resp = await self.fetch(req)
 
-        resp_json = await self.fetch(req)
-        access_token = resp_json['access_token']
+        access_token = resp['access_token']
 
         # Determine who the logged in user is
         headers = {
