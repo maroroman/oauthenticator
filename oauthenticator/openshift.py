@@ -7,10 +7,8 @@ import os
 
 import requests
 from jupyterhub.auth import LocalAuthenticator
-from tornado import web
-from tornado.auth import OAuth2Mixin
 from tornado.curl_httpclient import CurlError
-from tornado.httpclient import AsyncHTTPClient, HTTPClient, HTTPRequest
+from tornado.httpclient import HTTPRequest, HTTPError
 from tornado.httputil import url_concat
 from traitlets import Bool
 from traitlets import default
@@ -137,6 +135,11 @@ class OpenShiftOAuthenticator(OAuthenticator):
             resp = await self.fetch(req)
 
         access_token = resp['access_token']
+        user_info = await self._get_openshift_user_info(access_token)
+
+        return user_info
+
+    async def _get_openshift_user_info(self, access_token):
 
         # Determine who the logged in user is
         headers = {
@@ -153,7 +156,14 @@ class OpenShiftOAuthenticator(OAuthenticator):
             headers=headers,
         )
 
-        ocp_user = await self.fetch(req)
+        ocp_user = {}
+        try:
+            ocp_user = await self.fetch(req) #TODO: tornado.httpclient.HTTPClientError: HTTP 401: Unauthorized
+        except HTTPError as ex:
+            if ex.code == 401:
+                return None
+
+            raise ex
 
         username = ocp_user['metadata']['name']
 
@@ -189,6 +199,16 @@ class OpenShiftOAuthenticator(OAuthenticator):
             msg = f"username:{username} User not in any of the allowed/admin groups"
             self.log.warning(msg)
             return None
+
+    async def refresh_user(self, user, handler=None):
+        # Retrieve user authentication info, decode, and check if refresh is needed
+        auth_state = await user.get_auth_state()
+
+        user_info = await self._get_openshift_user_info(auth_state['access_token'])
+        if not user_info:
+            await user.stop()
+
+        return user_info
 
 
 class LocalOpenShiftOAuthenticator(LocalAuthenticator, OpenShiftOAuthenticator):
