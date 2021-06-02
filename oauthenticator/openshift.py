@@ -3,11 +3,7 @@ Custom Authenticator to use OpenShift OAuth with JupyterHub.
 
 Derived from the GitHub OAuth authenticator.
 """
-
-
-import json
 import os
-import warnings
 
 import requests
 from jupyterhub.auth import LocalAuthenticator
@@ -16,15 +12,12 @@ from tornado.auth import OAuth2Mixin
 from tornado.curl_httpclient import CurlError
 from tornado.httpclient import AsyncHTTPClient, HTTPClient, HTTPRequest
 from tornado.httputil import url_concat
+from traitlets import Bool
+from traitlets import default
+from traitlets import Set
+from traitlets import Unicode
 
 from oauthenticator.oauth2 import OAuthenticator
-from traitlets import Bool, Set, Unicode, default
-
-try:
-    import pycurl
-    AsyncHTTPClient.configure("tornado.curl_httpclient.CurlAsyncHTTPClient")
-except ModuleNotFoundError:
-    warnings.warn('pycurl not installed. defaulting to simple_httpclient')
 
 
 class OpenShiftOAuthenticator(OAuthenticator):
@@ -110,9 +103,6 @@ class OpenShiftOAuthenticator(OAuthenticator):
 
     async def authenticate(self, handler, data=None):
         code = handler.get_argument("code")
-        # TODO: Configure the curl_httpclient for tornado
-
-        http_client = AsyncHTTPClient()
 
         # Exchange the OAuth code for a OpenShift Access Token
         #
@@ -138,17 +128,15 @@ class OpenShiftOAuthenticator(OAuthenticator):
                )
         try:
             req = token_request(url)
-            resp = await http_client.fetch(req)
+            resp = await self.fetch(req)
         except CurlError:
             certs = "system ca certs" if self.use_ca_certs_for_token_request else "ca certs"
             self.log.info("Retrying oauth token request with %s" % certs)
             self.use_ca_certs_for_token_request = not self.use_ca_certs_for_token_request
             req = token_request(url)
-            resp = await http_client.fetch(req)
+            resp = await self.fetch(req)
 
-        resp_json = json.loads(resp.body.decode('utf8', 'replace'))
-
-        access_token = resp_json['access_token']
+        access_token = resp['access_token']
 
         # Determine who the logged in user is
         headers = {
@@ -165,8 +153,7 @@ class OpenShiftOAuthenticator(OAuthenticator):
             headers=headers,
         )
 
-        resp = await http_client.fetch(req)
-        ocp_user = json.loads(resp.body.decode('utf8', 'replace'))
+        ocp_user = await self.fetch(req)
 
         username = ocp_user['metadata']['name']
 
@@ -186,6 +173,7 @@ class OpenShiftOAuthenticator(OAuthenticator):
         is authenticated based on groups, an admin, or both.
         """
         user_groups = set(user_info['auth_state']['openshift_user']['groups'])
+        username = user_info['name']
 
         if self.admin_groups:
             is_admin = self.user_in_groups(user_groups, self.admin_groups)
@@ -198,8 +186,8 @@ class OpenShiftOAuthenticator(OAuthenticator):
         elif user_in_allowed_group:
             return user_info
         else:
-            msg = "username:{username} User not in any of the allowed/admin groups"
-            self.log.warning(msg.format(username=user_info['name']))
+            msg = f"username:{username} User not in any of the allowed/admin groups"
+            self.log.warning(msg)
             return None
 
 

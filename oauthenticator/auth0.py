@@ -28,19 +28,15 @@ jupyterhub_config.py :
   c.JupyterHub.authenticator_class = 'oauthenticator.auth0.Auth0OAuthenticator'
 
 """
-
 import json
 import os
 
-from tornado.auth import OAuth2Mixin
-from tornado import web
-from tornado.httpclient import HTTPRequest, AsyncHTTPClient
-
-from traitlets import Unicode, default
-
 from jupyterhub.auth import LocalAuthenticator
+from tornado.httpclient import HTTPRequest
+from traitlets import default
+from traitlets import Unicode
 
-from .oauth2 import OAuthLoginHandler, OAuthenticator
+from .oauth2 import OAuthenticator
 
 
 class Auth0OAuthenticator(OAuthenticator):
@@ -68,8 +64,6 @@ class Auth0OAuthenticator(OAuthenticator):
 
     async def authenticate(self, handler, data=None):
         code = handler.get_argument("code")
-        # TODO: Configure the curl_httpclient for tornado
-        http_client = AsyncHTTPClient()
 
         params = {
             'grant_type': 'authorization_code',
@@ -87,8 +81,7 @@ class Auth0OAuthenticator(OAuthenticator):
             body=json.dumps(params),
         )
 
-        resp = await http_client.fetch(req)
-        resp_json = json.loads(resp.body.decode('utf8', 'replace'))
+        resp_json = await self.fetch(req)
 
         access_token = resp_json['access_token']
 
@@ -106,8 +99,7 @@ class Auth0OAuthenticator(OAuthenticator):
             method="GET",
             headers=headers,
         )
-        resp = await http_client.fetch(req)
-        resp_json = json.loads(resp.body.decode('utf8', 'replace'))
+        resp_json = await self.fetch(req)
 
         return {
             'name': resp_json["email"],
@@ -115,7 +107,7 @@ class Auth0OAuthenticator(OAuthenticator):
                 'access_token': access_token,
                 'refresh_token': refresh_token,
                 'id_token': id_token,
-                'auth0_user': resp_json
+                'auth0_user': resp_json,
             },
         }
 
