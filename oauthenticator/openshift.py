@@ -115,24 +115,30 @@ class OpenShiftOAuthenticator(OAuthenticator):
 
         url = url_concat(self.token_url, params)
 
-        def token_request(url):
+        def token_request(url, use_ca_certs):
             return HTTPRequest(
                 url,
                 method="POST",
                 validate_cert=self.validate_cert,
-                ca_certs=self.ca_certs if self.use_ca_certs_for_token_request else self.system_ca_certs,
+                ca_certs=self.ca_certs if use_ca_certs else self.system_ca_certs,
                 headers={"Accept": "application/json"},
                 body='',  # Body is required for a POST...
                )
+
+        use_ca_certs = self.use_ca_certs_for_token_request
         try:
-            req = token_request(url)
+            req = token_request(url, use_ca_certs)
             resp = await self.fetch(req)
-        except CurlError:
-            certs = "system ca certs" if self.use_ca_certs_for_token_request else "ca certs"
-            self.log.info("Retrying oauth token request with %s" % certs)
-            self.use_ca_certs_for_token_request = not self.use_ca_certs_for_token_request
-            req = token_request(url)
-            resp = await self.fetch(req)
+        except CurlError as e:
+            if "SSL certificate problem" in e.message and self.ca_certs and self.system_ca_certs:
+                if use_ca_certs:
+                    self.log.info("Oauth token request failed with %s, retrying with %s" % (self.ca_certs, self.system_ca_certs))
+                else:
+                    self.log.info("Oauth token request failed with %s, retrying with %s" % (self.system_ca_certs, self.ca_certs))
+                req = token_request(url, not use_ca_certs)
+                resp = await self.fetch(req)
+            else:
+                raise e
 
         access_token = resp['access_token']
         user_info = await self._get_openshift_user_info(access_token)
